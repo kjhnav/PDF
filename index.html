@@ -2,70 +2,173 @@
 <html lang="ko">
 <head>
     <meta charset="UTF-8">
-    <title>PDF Viewer</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
+    <title>프레젠테이션 PDF 뷰어</title>
+    <script src="https://cloudflare.com"></script>
     <style>
         body { margin: 0; font-family: sans-serif; background: #525659; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
-        .toolbar { background: #323639; color: white; padding: 12px; display: flex; gap: 15px; justify-content: center; z-index: 100; transition: transform 0.3s; }
-        body.fullscreen-mode .toolbar { position: absolute; width: 100%; transform: translateY(-100%); opacity: 0; }
+        
+        /* 툴바 디자인 및 F11 전체화면 시 자동 숨김 애니메이션 */
+        .toolbar { 
+            background: #323639; color: white; padding: 12px; 
+            display: flex; gap: 15px; align-items: center; justify-content: center; 
+            z-index: 100; box-shadow: 0 2px 5px rgba(0,0,0,0.3); 
+            transition: transform 0.3s ease, opacity 0.3s ease; 
+        }
+        
+        /* [핵심] F11 전체화면 상태일 때 상단 메뉴 자동 숨김 */
+        body.fullscreen-mode .toolbar { position: absolute; width: 100%; box-sizing: border-box; transform: translateY(-100%); opacity: 0; }
         body.fullscreen-mode .toolbar:hover { transform: translateY(0); opacity: 1; }
-        .viewer-container { flex: 1; overflow: auto; padding: 20px; display: flex; flex-direction: column; align-items: center; gap: 20px; }
-        canvas { background: white; box-shadow: 0 4px 10px rgba(0,0,0,0.2); max-width: 100%; }
-        .viewer-container.grid-mode { flex-direction: row; flex-wrap: wrap; }
-        .viewer-container.grid-mode canvas { max-width: 45%; }
-        .placeholder-text { color: #ccc; margin-top: 100px; text-align: center; }
+        
+        .cmd-input { width: 120px; text-align: center; background: #222; color: #00ffcc; border: 2px solid #555; padding: 6px; border-radius: 4px; font-weight: bold; font-size: 14px; }
+        .cmd-input:focus { border-color: #00ffcc; outline: none; }
+        .info-text { font-size: 14px; color: #ccc; }
+
+        /* 뷰어 영역 (한 장씩 화면 정중앙 배치) */
+        .viewer-container { flex: 1; overflow: auto; padding: 20px; display: flex; justify-content: center; align-items: center; }
+        canvas { background: white; box-shadow: 0 4px 15px rgba(0,0,0,0.5); max-width: 100%; height: auto; }
+        #file-input { display: none; }
+        .placeholder-text { color: #ccc; text-align: center; font-size: 18px; line-height: 1.8; }
     </style>
 </head>
 <body>
+
     <div class="toolbar">
-        <input type="file" id="file-input" accept=".pdf" onchange="loadLocalFile(event)">
-        <button onclick="zoom(0.1)">➕</button>
-        <button onclick="zoom(-0.1)">➖</button>
-        <button id="view-mode-btn" onclick="toggleViewMode()">🔲</button>
-        <button onclick="toggleFullscreen()">📺</button>
+        <div>
+            <label for="file-input">📁 파일 열기 (Ctrl + O)</label>
+            <input type="file" id="file-input" accept=".pdf" onchange="loadLocalFile(event)">
+        </div>
+        |
+        <div>
+            <input type="text" id="cmd-field" class="cmd-input" placeholder="숫자, +, - 입력" onkeydown="handleCommand(event)">
+        </div>
+        |
+        <div class="info-text">페이지: <span id="current-page">0</span> / <span id="total-pages">0</span></div>
+        |
+        <div class="info-text">배율: <span id="zoom-val">100%</span></div>
+        |
+        <div>
+            <button onclick="changePage(-1)">▲ 이전</button>
+            <button onclick="changePage(1)">▼ 다음</button>
+        </div>
     </div>
-    <div id="viewer" class="viewer-container"></div>
+
+    <div id="viewer" class="viewer-container">
+        <div class="placeholder-text">
+            <strong>Ctrl + O</strong>를 눌러 PDF 파일을 열어주세요.<br>
+            파일이 열린 후 <strong>F11</strong>을 누르면 곧바로 슬라이드 쇼가 시작됩니다.
+        </div>
+    </div>
+
     <script>
-        // PDF.js 설정 및 초기화
         const pdfjsLib = window.pdfjsLib;
         pdfjsLib.GlobalWorkerOptions.workerSrc = ''; 
-        let pdfDoc = null, scale = 1.2, isGridMode = false;
+
+        let pdfDoc = null;
+        let currentPage = 1;
+        let scale = 1.0;
+
+        // [기능 1] Ctrl + O 및 위/아래 방향키 이벤트 바인딩
+        document.addEventListener('keydown', (e) => {
+            // 새 파일 열기 단축키 (Ctrl + O)
+            if (e.ctrlKey && e.key.toLowerCase() === 'o') {
+                e.preventDefault(); // 브라우저 기본 파일 열기 팝업 방지
+                document.getElementById('file-input').click(); // 제작한 파일찾기 실행
+                return;
+            }
+
+            // 입력창에 타이핑 중일 때는 방향키 넘김 방지
+            if (document.activeElement === document.getElementById('cmd-field')) return;
+
+            // 위/아래 및 좌/우 방향키로 페이지 이동
+            if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') { e.preventDefault(); changePage(-1); }
+            if (e.key === 'ArrowDown' || e.key === 'ArrowRight') { e.preventDefault(); changePage(1); }
+        });
+
+        // [기능 2] F11 전체화면 감지 및 실시간 인터페이스 자동 전환
+        window.addEventListener('resize', () => {
+            // 브라우저 창 크기가 모니터 최대 크기와 같아지면 F11 전체화면으로 판정
+            const isF11 = window.innerWidth === window.screen.width && window.innerHeight === window.screen.height;
+            
+            if (isF11) {
+                document.body.classList.add('fullscreen-mode');
+            } else {
+                document.body.classList.remove('fullscreen-mode');
+            }
+            if (pdfDoc) renderCurrentPage();
+        });
 
         function loadLocalFile(e) {
             const file = e.target.files[0];
+            if (!file) return;
             const reader = new FileReader();
-            reader.onload = function() { renderPDF(new Uint8Array(this.result)); };
+            reader.onload = function() {
+                const data = new Uint8Array(this.result);
+                pdfjsLib.getDocument({data: data}).promise.then(pdf => {
+                    pdfDoc = pdf;
+                    currentPage = 1;
+                    document.getElementById('total-pages').textContent = pdf.numPages;
+                    renderCurrentPage();
+                }).catch(err => alert("PDF 로드 에러: " + err.message));
+            };
             reader.readAsArrayBuffer(file);
         }
 
-        function renderPDF(data) {
-            pdfjsLib.getDocument({data: data}).promise.then(pdf => {
-                pdfDoc = pdf;
-                renderAll();
+        function handleCommand(event) {
+            if (event.key !== 'Enter') return;
+            if (!pdfDoc) return alert("파일을 먼저 열어주세요.");
+
+            const inputField = document.getElementById('cmd-field');
+            const value = inputField.value.trim();
+            inputField.value = '';
+
+            if (!value) return;
+
+            // 배율 변경 (10+, 10-)
+            if (value.endsWith('+') || value.endsWith('-')) {
+                const sign = value.slice(-1);
+                const percent = parseInt(value.slice(0, -1));
+                if (isNaN(percent)) return;
+
+                const scaleOffset = percent / 100;
+                scale = sign === '+' ? Math.min(4.0, scale + scaleOffset) : Math.max(0.2, scale - scaleOffset);
+                renderCurrentPage();
+                return;
+            }
+
+            // 특정 쪽 이동 (숫자 입력)
+            const targetPage = parseInt(value);
+            if (!isNaN(targetPage)) {
+                if (targetPage < 1 || targetPage > pdfDoc.numPages) return alert(`1~${pdfDoc.numPages} 사이 입력`);
+                currentPage = targetPage;
+                renderCurrentPage();
+            }
+        }
+
+        function renderCurrentPage() {
+            if (!pdfDoc) return;
+            const viewer = document.getElementById('viewer');
+            viewer.innerHTML = '';
+
+            pdfDoc.getPage(currentPage).then(page => {
+                const viewport = page.getViewport({ scale: scale });
+                const canvas = document.createElement('canvas');
+                canvas.height = viewport.height;
+                canvas.width = viewport.width;
+                viewer.appendChild(canvas);
+
+                document.getElementById('current-page').textContent = currentPage;
+                document.getElementById('zoom-val').textContent = Math.round(scale * 100) + '%';
+                page.render({ canvasContext: canvas.getContext('2d'), viewport: viewport });
             });
         }
 
-        function renderAll() {
-            const viewer = document.getElementById('viewer');
-            viewer.innerHTML = '';
-            for (let i = 1; i <= pdfDoc.numPages; i++) {
-                pdfDoc.getPage(i).then(page => {
-                    const viewport = page.getViewport({ scale: scale });
-                    const canvas = document.createElement('canvas');
-                    canvas.height = viewport.height; canvas.width = viewport.width;
-                    viewer.appendChild(canvas);
-                    page.render({ canvasContext: canvas.getContext('2d'), viewport: viewport });
-                });
+        function changePage(offset) {
+            if (!pdfDoc) return;
+            const nextPage = currentPage + offset;
+            if (nextPage >= 1 && nextPage <= pdfDoc.numPages) {
+                currentPage = nextPage;
+                renderCurrentPage();
             }
-        }
-        
-        function zoom(amount) { scale = Math.max(0.4, Math.min(3.5, scale + amount)); renderAll(); }
-        
-        function toggleFullscreen() {
-            if (!document.fullscreenElement) {
-                document.documentElement.requestFullscreen();
-                document.body.classList.add('fullscreen-mode');
-            } else { document.exitFullscreen(); document.body.classList.remove('fullscreen-mode'); }
         }
     </script>
 </body>
