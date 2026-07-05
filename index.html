@@ -3,16 +3,16 @@
 <head>
     <meta charset="UTF-8">
     <title>스마트 PDF 프레젠테이션 뷰어</title>
-    <!-- [핵심 변경] crbug 에러 및 로컬 파일 규제를 우회하는 호환성 전용 패키지로 주소를 변경했습니다. -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
+    <script src="https://cloudflare.com"></script>
     <style>
         body { margin: 0; font-family: sans-serif; background: #525659; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
         
         /* 상단 툴바 */
         .toolbar { background: #323639; color: white; padding: 12px; display: flex; gap: 15px; justify-content: center; align-items: center; z-index: 100; box-shadow: 0 2px 5px rgba(0,0,0,0.3); transition: transform 0.3s, opacity 0.3s; }
         
-        /* F11 전체화면 모드 시 툴바 자동 숨김 스타일 */
-        body.fullscreen-mode .toolbar { position: absolute; width: 100%; box-sizing: border-box; transform: translateY(-100%); opacity: 0; }
+        /* [교정] F11 전체화면 모드 시 툴바가 하늘 위로 확실하게 숨겨집니다 */
+        body.fullscreen-mode .toolbar { position: absolute; top: 0; left: 0; width: 100%; box-sizing: border-box; transform: translateY(-100%); opacity: 0; }
+        /* 전체화면이더라도 마우스를 천장 끝까지 붙이면 메뉴 바가 부드럽게 내려옵니다 */
         body.fullscreen-mode .toolbar:hover { transform: translateY(0); opacity: 1; }
         
         .toolbar button, .toolbar label { padding: 6px 12px; background: #4a4a4a; color: white; border: 1px solid #666; border-radius: 4px; cursor: pointer; font-size: 14px; }
@@ -23,7 +23,7 @@
         .cmd-input:focus { border-color: #00ffcc; outline: none; }
         .info-text { font-size: 14px; color: #ccc; }
 
-        /* 뷰어 영역 (슬라이드쇼를 위해 화면 정중앙에 1장씩 배치) */
+        /* 뷰어 영역 (가운데 정렬 및 스크롤 바 자동 제어) */
         .viewer-container { flex: 1; overflow: auto; padding: 20px; display: flex; justify-content: center; align-items: center; }
         canvas { background: white; box-shadow: 0 4px 15px rgba(0,0,0,0.5); max-width: 100%; height: auto; display: block; }
         #file-input { display: none; }
@@ -36,12 +36,11 @@
         <input type="file" id="file-input" accept=".pdf" onchange="loadLocalFile(event)">
         
         |
-        <!-- 만능 명령창 박스 -->
         <input type="text" id="cmd-field" class="cmd-input" placeholder="숫자, +, - 입력" onkeydown="handleCommand(event)">
         |
 
         <div class="info-text">페이지: <span id="current-page">0</span> / <span id="total-pages">0</span></div>
-        <div class="info-text">배율: <span id="zoom-val">120%</span></div>
+        <div class="info-text">배율: <span id="zoom-val">100%</span></div>
         
         <button onclick="changePage(-1)">▲ 이전</button>
         <button onclick="changePage(1)">▼ 다음</button>
@@ -55,41 +54,41 @@
     </div>
 
     <script>
-        // crbug 차단을 차단하는 무력화 설정
         const pdfjsLib = window.pdfjsLib;
-        pdfjsLib.GlobalWorkerOptions.workerSrc = ''; // 워커 외부 다운로드 금지 처리
+        pdfjsLib.GlobalWorkerOptions.workerSrc = ''; 
         
-        let pdfDoc = null, scale = 1.2, currentPage = 1;
+        let pdfDoc = null, scale = 1.0, currentPage = 1;
 
         // [단축키 제어 시스템]
         document.addEventListener('keydown', (e) => {
-            // 1. Ctrl + O 파일 열기 창 호출
             if (e.ctrlKey && e.key.toLowerCase() === 'o') {
                 e.preventDefault(); 
                 document.getElementById('file-input').click(); 
                 return;
             }
 
-            // 명령창 입력 중에는 방향키 이동 일시 정지
             if (document.activeElement === document.getElementById('cmd-field')) return;
 
-            // 2. 위/아래(▲/▼), 좌/우(◀/▶) 방향키 페이지 이동 통합
             if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') { e.preventDefault(); changePage(-1); }
             if (e.key === 'ArrowDown' || e.key === 'ArrowRight') { e.preventDefault(); changePage(1); }
         });
 
-        // [F11 전체화면 실시간 변화 감지 연동]
+        // [F11 전체화면 모니터링 기능 강화]
         window.addEventListener('resize', () => {
+            // 브라우저의 내부 해상도가 모니터 실제 해상도와 일치하는지 정밀 대조하여 F11 판정
             const isF11 = window.innerWidth === window.screen.width && window.innerHeight === window.screen.height;
             if (isF11) {
                 document.body.classList.add('fullscreen-mode');
             } else {
                 document.body.classList.remove('fullscreen-mode');
             }
-            if (pdfDoc) renderCurrentPage();
+            
+            // 전체화면 변경 시 화면 리사이징에 맞춰 배율을 다시 자동 최적화합니다
+            if (pdfDoc) {
+                fitToWidth();
+            }
         });
 
-        // 파일 열기 엔진 (주신 성공 원형 코드 기반 보존)
         function loadLocalFile(e) {
             const file = e.target.files[0];
             if (!file) return;
@@ -99,26 +98,49 @@
         }
 
         function renderPDF(data) {
-            // 주안점: crbug 규제 통과를 위해 데이터 직렬화 옵션 강제 주입
             pdfjsLib.getDocument({
                 data: data,
                 stopAtErrors: false,
                 isEvalSupported: false
             }).promise.then(pdf => {
                 pdfDoc = pdf;
-                currentPage = 1; // 첫 파일 로드 시 1페이지 고정
+                currentPage = 1;
                 document.getElementById('total-pages').textContent = pdf.numPages;
-                renderCurrentPage();
+                
+                // [신규] 파일을 열자마자 브라우저 너비에 맞추는 계산 함수 작동
+                fitToWidth();
             }).catch(err => {
-                alert("보안 우회 로딩 실패: " + err.message + "\n브라우저의 보안 등급을 확인해 주세요.");
+                alert("보안 우회 로딩 실패: " + err.message);
             });
         }
 
-        // [슬라이드쇼 전용 기능] 전체 페이지가 아닌 선택된 딱 '한 장만' 조명 렌더링
+        // [신규] 현재 화면 너비에 맞게 배율(Scale)을 자동으로 계산해 주는 기능
+        function fitToWidth() {
+            if (!pdfDoc) return;
+            pdfDoc.getPage(currentPage).then(page => {
+                const viewerContainer = document.getElementById('viewer');
+                
+                // 패딩 값을 제외한 순수 뷰어 내부 너비 구하기
+                const containerWidth = viewerContainer.clientWidth - 40; 
+                
+                // 배율이 1일 때의 원본 PDF 너비 구하기
+                const unscaledViewport = page.getViewport({ scale: 1.0 });
+                
+                // 컨테이너 너비와 원본 너비를 비교하여 딱 맞는 비율 계산
+                scale = containerWidth / unscaledViewport.width;
+                
+                // 최대/최소 배율 상한선 제한 처리 (너무 과하게 커지거나 작아짐 방지)
+                scale = Math.max(0.4, Math.min(2.5, scale));
+                
+                renderCurrentPage();
+            });
+        }
+
+        // 슬라이드쇼 단일 페이지 렌더링
         function renderCurrentPage() {
             if (!pdfDoc) return;
             const viewer = document.getElementById('viewer');
-            viewer.innerHTML = ''; // 이전 잔상 청소
+            viewer.innerHTML = ''; 
 
             pdfDoc.getPage(currentPage).then(page => {
                 const viewport = page.getViewport({ scale: scale });
@@ -126,7 +148,6 @@
                 canvas.height = viewport.height; canvas.width = viewport.width;
                 viewer.appendChild(canvas);
                 
-                // 정보 UI 텍스트 수치 최신화
                 document.getElementById('current-page').textContent = currentPage;
                 document.getElementById('zoom-val').textContent = Math.round(scale * 100) + '%';
                 
@@ -134,18 +155,18 @@
             });
         }
 
-        // [만능 명령어 처리 장치] 10+, 10-, 숫자엔터 판독기
+        // 만능 명령어 조작 (10+, 10-, 숫자엔터)
         function handleCommand(event) {
             if (event.key !== 'Enter') return;
             if (!pdfDoc) return alert("파일을 먼저 열어주세요.");
 
             const inputField = document.getElementById('cmd-field');
             const value = inputField.value.trim();
-            inputField.value = ''; // 입력 후 즉시 지우기
+            inputField.value = ''; 
 
             if (!value) return;
 
-            // 1. 조금씩 확대 / 축소 규칙 처리 (예: 10+, 10-)
+            // 1. 배율 수동 가감 조작 (예: 10+, 10-)
             if (value.endsWith('+') || value.endsWith('-')) {
                 const sign = value.slice(-1);
                 const percent = parseInt(value.slice(0, -1));
@@ -157,7 +178,7 @@
                 return;
             }
 
-            // 2. 입력된 쪽수로 곧바로 워프 점프 (예: 12 엔터)
+            // 2. 특정 쪽수로 바로 워프 점프 (예: 10 엔터)
             const targetPage = parseInt(value);
             if (!isNaN(targetPage)) {
                 if (targetPage < 1 || targetPage > pdfDoc.numPages) return alert(`1부터 ${pdfDoc.numPages}페이지 사이로 입력해주세요.`);
@@ -166,10 +187,9 @@
                 return;
             }
 
-            alert("올바른 형식이 아닙니다.\n이동: 숫자 (예: 5)\n배율: 숫자+ 또는 숫자- (예: 10+)");
+            alert("올바른 형식이 아닙니다.");
         }
 
-        // 이전 / 다음 제어 오프셋 연산
         function changePage(offset) {
             if (!pdfDoc) return;
             const nextPage = currentPage + offset;
