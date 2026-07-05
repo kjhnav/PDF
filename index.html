@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>내 스마트 PDF 뷰어</title>
+    <!-- 오픈소스 PDF.js 라이브러리 (Cloudflare CDN을 통해 안전하게 가져옵니다) -->
+    <script src="https://cloudflare.com"></script>
+    <style>
+        body { margin: 0; font-family: sans-serif; background: #525659; display: flex; flex-direction: column; height: 100vh; }
+        /* 상단 툴바 조작 영역 */
+        .toolbar { background: #323639; color: white; padding: 12px; display: flex; gap: 15px; align-items: center; justify-content: center; position: sticky; top: 0; z-index: 100; box-shadow: 0 2px 5px rgba(0,0,0,0.3); flex-wrap: wrap; }
+        .toolbar button, .toolbar input[type="button"], .toolbar label { padding: 6px 12px; background: #4a4a4a; color: white; border: 1px solid #666; border-radius: 4px; cursor: pointer; font-size: 14px; }
+        .toolbar button:hover, .toolbar label:hover { background: #5a5a5a; }
+        .toolbar input[type="number"] { width: 50px; text-align: center; background: #222; color: white; border: 1px solid #666; padding: 4px; }
+        .toolbar input[type="text"] { width: 200px; background: #222; color: white; border: 1px solid #666; padding: 6px; border-radius: 4px; }
+        /* 파일 업로드 숨김 라벨 스타일링 */
+        #file-input { display: none; }
+        /* PDF 렌더링 화면 (잘림 방지 스크롤) */
+        .viewer-container { flex: 1; overflow: auto; padding: 20px; display: flex; flex-direction: column; align-items: center; gap: 20px; }
+        canvas { background: white; box-shadow: 0 4px 10px rgba(0,0,0,0.2); max-width: 100%; height: auto; }
+        .viewer-container.grid-mode { flex-direction: row; flex-wrap: wrap; justify-content: center; }
+        .viewer-container.grid-mode canvas { max-width: 45%; }
+        /* 안내 문구 */
+        .placeholder-text { color: #ccc; font-size: 18px; margin-top: 100px; text-align: center; line-height: 1.6; }
+    </style>
+</head>
+<body>
+
+    <!-- 상단 컨트롤 툴바 -->
+    <div class="toolbar">
+        <!-- 파일 불러오기 파트 -->
+        <div>
+            <label for="file-input">📁 내 PC 파일 찾기</label>
+            <input type="file" id="file-input" accept=".pdf" onchange="loadLocalFile(event)">
+        </div>
+        <div>
+            <input type="text" id="url-input" placeholder="구글 드라이브 링크 입력">
+            <button onclick="loadDriveFile()">🔗 링크 열기</button>
+        </div>
+        |
+        <!-- 크기 조절 -->
+        <div>
+            <button onclick="zoom(0.1)">➕ 크게</button>
+            <button onclick="zoom(-0.1)">➖ 작게</button>
+            <span id="zoom-val">120%</span>
+        </div>
+        |
+        <!-- 페이지 이동 -->
+        <div>
+            <input type="number" id="page-input" value="1" min="1" onkeydown="if(event.key==='Enter') goToPage()"> / <span id="total-pages">0</span>
+            <button onclick="goToPage()">이동</button>
+        </div>
+        |
+        <!-- 멀티 보기 -->
+        <div>
+            <button id="view-mode-btn" onclick="toggleViewMode()">🔲 여러 페이지 보기</button>
+        </div>
+    </div>
+
+    <!-- PDF가 그려지는 본문 영역 -->
+    <div id="viewer" class="viewer-container">
+        <div class="placeholder-text">
+            상단에서 PDF 파일을 업로드하거나<br>구글 드라이브 공유 링크를 넣어주세요.
+        </div>
+    </div>
+
+    <script>
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cloudflare.com';
+
+        let pdfDoc = null;
+        let scale = 1.2;
+        let isGridMode = false;
+
+        // 1. 내 컴퓨터 파일 업로드 처리 함수
+        function loadLocalFile(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const fileReader = new FileReader();
+            fileReader.onload = function() {
+                const typedarray = new Uint8Array(this.result);
+                renderPDF(typedarray); // 바이너리 데이터로 PDF 로드
+            };
+            fileReader.readAsArrayBuffer(file);
+        }
+
+        // 2. 구글 드라이브 공유 링크 처리 함수
+        function loadDriveFile() {
+            let url = document.getElementById('url-input').value.trim();
+            if (!url) return alert("링크를 입력해주세요.");
+
+            // 구글 드라이브 웹 주소를 파일 다운로드 직통 주소(Direct Download URL)로 자동 변환하는 정규식
+            const driveRegex = /\/d\/([a-zA-Z0-9-_]+)/;
+            const match = url.match(driveRegex);
+
+            if (match && match[1]) {
+                const fileId = match[1];
+                // 핵심: 브라우저 보안(CORS) 우회를 위한 구글 공식 다운로드 프록시 주소 주입
+                const directUrl = `https://google.com{fileId}`;
+                renderPDF(directUrl);
+            } else {
+                // 일반 웹 주소일 경우 그대로 로드 시도
+                renderPDF(url);
+            }
+        }
+
+        // PDF 엔진 초기화 및 로드 공통 함수
+        function renderPDF(source) {
+            document.getElementById('viewer').innerHTML = '<div class="placeholder-text">로딩 중...</div>';
+            
+            pdfjsLib.getDocument(source).promise.then(pdf => {
+                pdfDoc = pdf;
+                document.getElementById('total-pages').textContent = pdf.numPages;
+                document.getElementById('page-input').value = 1;
+                renderAll();
+            }).catch(err => {
+                alert("PDF를 열 수 없습니다.\n원인: " + err.message + "\n\n※ 구글 드라이브 링크인 경우 반드시 '링크가 있는 모든 사용자에게 공개(뷰어)'로 권한이 설정되어 있어야 합니다.");
+                document.getElementById('viewer').innerHTML = '<div class="placeholder-text">파일 로드에 실패했습니다.</div>';
+            });
+        }
+
+        // 화면 그리기 및 제어 로직 (이전과 동일)
+        function renderAll() {
+            const viewer = document.getElementById('viewer');
+            viewer.innerHTML = ''; 
+
+            if (isGridMode) {
+                for (let i = 1; i <= pdfDoc.numPages; i++) { createPageCanvas(i); }
+            } else {
+                const pageNum = parseInt(document.getElementById('page-input').value) || 1;
+                createPageCanvas(pageNum);
+            }
+        }
+
+        function createPageCanvas(pageNum) {
+            pdfDoc.getPage(pageNum).then(page => {
+                const viewport = page.getViewport({ scale: scale });
+                const canvas = document.createElement('canvas');
+                const context = canvas.getContext('2d');
+                canvas.height = viewport.height;
+                canvas.width = viewport.width;
+                document.getElementById('viewer').appendChild(canvas);
+                page.render({ canvasContext: context, viewport: viewport });
+            });
+        }
+
+        function zoom(amount) {
+            if (!pdfDoc) return;
+            scale = Math.max(0.5, Math.min(3.0, scale + amount));
+            document.getElementById('zoom-val').textContent = Math.round(scale * 100) + '%';
+            renderAll();
+        }
+
+        function goToPage() {
+            if (!pdfDoc || isGridMode) return;
+            let input = document.getElementById('page-input');
+            let pageNum = parseInt(input.value);
+            if (pageNum < 1) pageNum = 1;
+            if (pageNum > pdfDoc.numPages) pageNum = pdfDoc.numPages;
+            input.value = pageNum;
+            renderAll();
+        }
+
+        function toggleViewMode() {
+            if (!pdfDoc) return alert("파일을 먼저 업로드해주세요.");
+            isGridMode = !isGridMode;
+            const viewer = document.getElementById('viewer');
+            const btn = document.getElementById('view-mode-btn');
+            const pageInput = document.getElementById('page-input');
+
+            if (isGridMode) {
+                viewer.classList.add('grid-mode');
+                btn.textContent = "📄 한 페이지씩 보기";
+                pageInput.disabled = true;
+            } else {
+                viewer.classList.remove('grid-mode');
+                btn.textContent = "🔲 여러 페이지 보기";
+                pageInput.disabled = false;
+            }
+            renderAll();
+        }
+    </script>
+</body>
+</html>
