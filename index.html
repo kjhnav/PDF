@@ -2,12 +2,13 @@
 <html lang="ko">
 <head>
     <meta charset="UTF-8">
-    <title>전체 화면 지원 PDF 뷰어</title>
-    <script src="https://unpkg.com"></script>
+    <title>절대 멈추지 않는 PDF 뷰어</title>
+    <!-- [핵심] 별도의 worker 파일 요구가 없어 보안 에러가 안 나는 싱글 코어 안정 버전을 사용합니다. -->
+    <script src="https://cloudflare.com"></script>
     <style>
         body { margin: 0; font-family: sans-serif; background: #525659; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
         
-        /* 상단 툴바 스타일 및 애니메이션 설정 */
+        /* 툴바 기본 디자인 및 애니메이션 */
         .toolbar { 
             background: #323639; color: white; padding: 12px; 
             display: flex; gap: 15px; align-items: center; justify-content: center; 
@@ -16,26 +17,19 @@
             transition: transform 0.3s ease, opacity 0.3s ease;
         }
         
-        /* [핵심] 전체 화면 상태에서 메뉴 숨기기 클래스 */
+        /* 전체 화면 시 메뉴 숨기기 처리 */
         body.fullscreen-mode .toolbar {
-            position: absolute;
-            width: 100%;
-            box-sizing: border-box;
-            transform: translateY(-100%); /* 화면 위로 숨김 */
-            opacity: 0;
+            position: absolute; width: 100%; box-sizing: border-box;
+            transform: translateY(-100%); opacity: 0;
         }
         
-        /* 전체 화면이라도 마우스를 화면 맨 위(Top 20px 이내)로 올리면 메뉴가 슬라이드 다운 */
+        /* 전체 화면에서도 마우스를 맨 위로 올리면 슬라이드 다운 */
         body.fullscreen-mode .toolbar:hover,
         body.fullscreen-mode #fullscreen-trigger:hover + .toolbar {
-            transform: translateY(0);
-            opacity: 1;
+            transform: translateY(0); opacity: 1;
         }
 
-        /* 마우스 감지용 투명 레이어 */
-        #fullscreen-trigger {
-            position: absolute; top: 0; left: 0; width: 100%; height: 20px; z-index: 99; display: none;
-        }
+        #fullscreen-trigger { position: absolute; top: 0; left: 0; width: 100%; height: 20px; z-index: 99; display: none; }
         body.fullscreen-mode #fullscreen-trigger { display: block; }
 
         .toolbar button, .toolbar label { padding: 6px 12px; background: #4a4a4a; color: white; border: 1px solid #666; border-radius: 4px; cursor: pointer; font-size: 14px; }
@@ -43,6 +37,7 @@
         .toolbar input[type="number"] { width: 50px; text-align: center; background: #222; color: white; border: 1px solid #666; padding: 4px; }
         #file-input { display: none; }
         
+        /* 렌더링 영역 */
         .viewer-container { flex: 1; overflow: auto; padding: 20px; display: flex; flex-direction: column; align-items: center; gap: 20px; }
         .viewer-container.dragover { background: #404447; border: 3px dashed #3498db; }
         canvas { background: white; box-shadow: 0 4px 10px rgba(0,0,0,0.2); max-width: 100%; height: auto; }
@@ -53,10 +48,9 @@
 </head>
 <body>
 
-    <!-- 전체 화면 시 마우스 감지용 영역 -->
     <div id="fullscreen-trigger"></div>
 
-    <div class="toolbar" id="my-toolbar">
+    <div class="toolbar">
         <div>
             <label for="file-input">📁 내 PC 파일 열기</label>
             <input type="file" id="file-input" accept=".pdf" onchange="loadLocalFile(event)">
@@ -77,12 +71,12 @@
             <button id="view-mode-btn" onclick="toggleViewMode()">🔲 여러 페이지 보기</button>
         </div>
         |
-        <!-- 전체 화면 버튼 추가 -->
         <div>
             <button onclick="toggleFullscreen()">📺 전체 화면</button>
         </div>
     </div>
 
+    <!-- 파일 영역 -->
     <div id="viewer" class="viewer-container" ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event)">
         <div class="placeholder-text">
             왼쪽 상단 <strong>[내 PC 파일 열기]</strong> 버튼을 누르거나,<br>
@@ -91,51 +85,42 @@
     </div>
 
     <script>
-        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://unpkg.com';
-
+        // 무조건 작동을 위해 구버전 전용의 싱글 빌드 글로벌 설정 주입
+        const pdfjsLib = window['pdfjs-dist/build/pdf'];
+        
         let pdfDoc = null;
         let scale = 1.2;
         let isGridMode = false;
 
-        // [신규] 전체 화면 토글 함수
-        function toggleFullscreen() {
-            if (!pdfDoc) return alert("파일을 먼저 열어주세요.");
-            
-            if (!document.fullscreenElement) {
-                // 브라우저 자체 전체 화면 요청 (모니터 가득 채우기)
-                document.documentElement.requestFullscreen().then(() => {
-                    document.body.classList.add('fullscreen-mode');
-                }).catch(err => alert(`전체 화면 실패: ${err.message}`));
-            } else {
-                document.exitFullscreen();
-            }
-        }
-
-        // ESC 키 등으로 전체 화면 빠져나갈 때 메뉴판 복구 이벤트 감지
-        document.addEventListener('fullscreenchange', () => {
-            if (!document.fullscreenElement) {
-                document.body.classList.remove('fullscreen-mode');
-            }
-        });
-
-        // 드래그 앤 드롭 및 기본 업로드 로직
+        // 드래그 앤 드롭 제어
         function onDragOver(e) { e.preventDefault(); document.getElementById('viewer').classList.add('dragover'); }
         function onDragLeave(e) { e.preventDefault(); document.getElementById('viewer').classList.remove('dragover'); }
         function onDrop(e) {
             e.preventDefault();
             document.getElementById('viewer').classList.remove('dragover');
             const files = e.dataTransfer.files;
-            if (files.length > 0 && files[0].type === "application/pdf") readPdfFile(files[0]);
+            if (files.length > 0) readPdfFile(files[0]);
         }
-        function loadLocalFile(e) { if (e.target.files.length > 0) readPdfFile(e.target.files[0]); }
+        
+        function loadLocalFile(e) { 
+            if (e.target.files.length > 0) readPdfFile(e.target.files[0]); 
+        }
 
+        // 로컬 파일을 바이너리 배열로 전송 변환
         function readPdfFile(file) {
-            document.getElementById('viewer').innerHTML = '<div class="placeholder-text">⚡ 파일을 읽는 중입니다...</div>';
+            if (file.type !== "application/pdf") return alert("PDF 파일만 업로드할 수 있습니다.");
+            
+            document.getElementById('viewer').innerHTML = '<div class="placeholder-text">⚡ 파일을 안정적으로 파싱하는 중입니다...</div>';
+            
             const reader = new FileReader();
-            reader.onload = function() { renderPDF(new Uint8Array(this.result)); };
+            reader.onload = function() {
+                const typedarray = new Uint8Array(this.result);
+                renderPDF(typedarray);
+            };
             reader.readAsArrayBuffer(file);
         }
 
+        // PDF 엔진 기동 및 렌더 가동
         function renderPDF(data) {
             pdfjsLib.getDocument({data: data}).promise.then(pdf => {
                 pdfDoc = pdf;
@@ -143,8 +128,8 @@
                 document.getElementById('page-input').value = 1;
                 renderAll();
             }).catch(err => {
-                alert("오류: " + err.message);
-                document.getElementById('viewer').innerHTML = '<div class="placeholder-text">PDF를 해석하지 못했습니다.</div>';
+                alert("엔진 로드 실패: " + err.message);
+                document.getElementById('viewer').innerHTML = '<div class="placeholder-text">PDF 해석에 에러가 발생했습니다.</div>';
             });
         }
 
@@ -171,6 +156,7 @@
             });
         }
 
+        // 툴바 제어 로직들
         function zoom(amount) {
             if (!pdfDoc) return;
             scale = Math.max(0.4, Math.min(3.5, scale + amount));
@@ -206,6 +192,21 @@
             }
             renderAll();
         }
+
+        function toggleFullscreen() {
+            if (!pdfDoc) return alert("파일을 먼저 열어주세요.");
+            if (!document.fullscreenElement) {
+                document.documentElement.requestFullscreen().then(() => {
+                    document.body.classList.add('fullscreen-mode');
+                }).catch(err => alert(`전체화면 실패: ${err.message}`));
+            } else {
+                document.exitFullscreen();
+            }
+        }
+
+        document.addEventListener('fullscreenchange', () => {
+            if (!document.fullscreenElement) document.body.classList.remove('fullscreen-mode');
+        });
     </script>
 </body>
 </html>
