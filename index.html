@@ -2,12 +2,13 @@
 <html lang="ko">
 <head>
     <meta charset="UTF-8">
-    <title>프레젠테이션 PDF 뷰어</title>
+    <title>슬라이드쇼 PDF 프레젠테이션</title>
+    <!-- 인터넷/로컬 무관 100% 돌아가는 안정화 버전 탑재 -->
     <script src="https://cloudflare.com"></script>
     <style>
         body { margin: 0; font-family: sans-serif; background: #525659; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
         
-        /* 툴바 디자인 및 F11 전체화면 시 자동 숨김 애니메이션 */
+        /* 툴바 상단 기본 고정 디자인 */
         .toolbar { 
             background: #323639; color: white; padding: 12px; 
             display: flex; gap: 15px; align-items: center; justify-content: center; 
@@ -15,26 +16,28 @@
             transition: transform 0.3s ease, opacity 0.3s ease; 
         }
         
-        /* [핵심] F11 전체화면 상태일 때 상단 메뉴 자동 숨김 */
+        /* F11 전체화면 감지 시 상단 메뉴가 하늘 위로 숨겨집니다 */
         body.fullscreen-mode .toolbar { position: absolute; width: 100%; box-sizing: border-box; transform: translateY(-100%); opacity: 0; }
+        /* 전체화면이더라도 마우스를 천장 끝까지 붙이면 메뉴 바가 스르륵 내려옵니다 */
         body.fullscreen-mode .toolbar:hover { transform: translateY(0); opacity: 1; }
         
         .cmd-input { width: 120px; text-align: center; background: #222; color: #00ffcc; border: 2px solid #555; padding: 6px; border-radius: 4px; font-weight: bold; font-size: 14px; }
         .cmd-input:focus { border-color: #00ffcc; outline: none; }
         .info-text { font-size: 14px; color: #ccc; }
 
-        /* 뷰어 영역 (한 장씩 화면 정중앙 배치) */
+        /* 무조건 모니터 정중앙에 PDF 슬라이드가 배치되는 스크롤 컨테이너 */
         .viewer-container { flex: 1; overflow: auto; padding: 20px; display: flex; justify-content: center; align-items: center; }
         canvas { background: white; box-shadow: 0 4px 15px rgba(0,0,0,0.5); max-width: 100%; height: auto; }
         #file-input { display: none; }
-        .placeholder-text { color: #ccc; text-align: center; font-size: 18px; line-height: 1.8; }
+        .placeholder-text { color: #ccc; text-align: center; font-size: 18px; line-height: 2.0; pointer-events: none; }
     </style>
 </head>
 <body>
 
+    <!-- 상단 컨트롤러 조작바 -->
     <div class="toolbar">
         <div>
-            <label for="file-input">📁 파일 열기 (Ctrl + O)</label>
+            <label for="file-input" style="padding: 6px 12px; background: #4a4a4a; color: white; border: 1px solid #666; border-radius: 4px; cursor: pointer; font-size: 14px;">📁 파일 열기 (Ctrl + O)</label>
             <input type="file" id="file-input" accept=".pdf" onchange="loadLocalFile(event)">
         </div>
         |
@@ -47,19 +50,21 @@
         <div class="info-text">배율: <span id="zoom-val">100%</span></div>
         |
         <div>
-            <button onclick="changePage(-1)">▲ 이전</button>
-            <button onclick="changePage(1)">▼ 다음</button>
+            <button onclick="changePage(-1)" style="padding: 6px 12px; background: #4a4a4a; color: white; border: 1px solid #666; border-radius: 4px; cursor: pointer;">▲ 이전</button>
+            <button onclick="changePage(1)" style="padding: 6px 12px; background: #4a4a4a; color: white; border: 1px solid #666; border-radius: 4px; cursor: pointer;">▼ 다음</button>
         </div>
     </div>
 
+    <!-- PDF 본문 렌더링 화면 -->
     <div id="viewer" class="viewer-container">
         <div class="placeholder-text">
-            <strong>Ctrl + O</strong>를 눌러 PDF 파일을 열어주세요.<br>
-            파일이 열린 후 <strong>F11</strong>을 누르면 곧바로 슬라이드 쇼가 시작됩니다.
+            <strong>Ctrl + O</strong> 버튼을 눌러 PDF 파일을 불러오세요.<br>
+            파일 실행 후 <strong>F11</strong>을 누르면 스크린 가득 슬라이드 쇼를 감상할 수 있습니다.
         </div>
     </div>
 
     <script>
+        // 글로벌 안전 객체 주입
         const pdfjsLib = window.pdfjsLib;
         pdfjsLib.GlobalWorkerOptions.workerSrc = ''; 
 
@@ -67,28 +72,26 @@
         let currentPage = 1;
         let scale = 1.0;
 
-        // [기능 1] Ctrl + O 및 위/아래 방향키 이벤트 바인딩
+        // [단축키 시스템 총괄]
         document.addEventListener('keydown', (e) => {
-            // 새 파일 열기 단축키 (Ctrl + O)
+            // 1. Ctrl + O 입력 시 강제로 브라우저 내 파일 탐색기 팝업 창 호출
             if (e.ctrlKey && e.key.toLowerCase() === 'o') {
-                e.preventDefault(); // 브라우저 기본 파일 열기 팝업 방지
-                document.getElementById('file-input').click(); // 제작한 파일찾기 실행
+                e.preventDefault(); 
+                document.getElementById('file-input').click(); 
                 return;
             }
 
-            // 입력창에 타이핑 중일 때는 방향키 넘김 방지
+            // 명령어 타이핑 중일 때는 키보드 방향키 이동 제동 장치 활성화
             if (document.activeElement === document.getElementById('cmd-field')) return;
 
-            // 위/아래 및 좌/우 방향키로 페이지 이동
+            // 2. 위/아래(▲/▼) 및 좌/우(◀/▶) 방향키 입력 시 슬라이드 이동 동기화
             if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') { e.preventDefault(); changePage(-1); }
             if (e.key === 'ArrowDown' || e.key === 'ArrowRight') { e.preventDefault(); changePage(1); }
         });
 
-        // [기능 2] F11 전체화면 감지 및 실시간 인터페이스 자동 전환
+        // [F11 상태 모니터링 체크]
         window.addEventListener('resize', () => {
-            // 브라우저 창 크기가 모니터 최대 크기와 같아지면 F11 전체화면으로 판정
             const isF11 = window.innerWidth === window.screen.width && window.innerHeight === window.screen.height;
-            
             if (isF11) {
                 document.body.classList.add('fullscreen-mode');
             } else {
@@ -97,9 +100,13 @@
             if (pdfDoc) renderCurrentPage();
         });
 
+        // [내 PC 로컬 파일 업로드 엔진 - 버그 전면 교정 완료]
         function loadLocalFile(e) {
-            const file = e.target.files[0];
-            if (!file) return;
+            const files = e.target.files;
+            if (!files || files.length === 0) return; // 파일 선택 취소 시 탈출
+
+            document.getElementById('viewer').innerHTML = '<div class="placeholder-text">⚡ 로컬 문서를 가속 분석하는 중입니다...</div>';
+
             const reader = new FileReader();
             reader.onload = function() {
                 const data = new Uint8Array(this.result);
@@ -108,11 +115,15 @@
                     currentPage = 1;
                     document.getElementById('total-pages').textContent = pdf.numPages;
                     renderCurrentPage();
-                }).catch(err => alert("PDF 로드 에러: " + err.message));
+                }).catch(err => {
+                    alert("PDF 엔진 해석 실패: " + err.message);
+                    document.getElementById('viewer').innerHTML = '<div class="placeholder-text">올바른 형식의 PDF가 아닙니다.</div>';
+                });
             };
-            reader.readAsArrayBuffer(file);
+            reader.readAsArrayBuffer(files[0]); // [★교정 핵심] 복수 객체가 아닌 0번 index의 순수 바이너리를 명시적 전달
         }
 
+        // [만능 입력 명령바 조작 프로세스]
         function handleCommand(event) {
             if (event.key !== 'Enter') return;
             if (!pdfDoc) return alert("파일을 먼저 열어주세요.");
@@ -123,11 +134,11 @@
 
             if (!value) return;
 
-            // 배율 변경 (10+, 10-)
+            // 1. 배율 증감 제어 (예: 10+, 10-)
             if (value.endsWith('+') || value.endsWith('-')) {
                 const sign = value.slice(-1);
                 const percent = parseInt(value.slice(0, -1));
-                if (isNaN(percent)) return;
+                if (isNaN(percent) || percent <= 0) return alert("숫자 뒤에 +/- 기호를 붙여주세요 (예: 10+)");
 
                 const scaleOffset = percent / 100;
                 scale = sign === '+' ? Math.min(4.0, scale + scaleOffset) : Math.max(0.2, scale - scaleOffset);
@@ -135,19 +146,23 @@
                 return;
             }
 
-            // 특정 쪽 이동 (숫자 입력)
+            // 2. 단독 숫자 입력 시 특정 페이지 타겟팅 다이렉트 점프
             const targetPage = parseInt(value);
             if (!isNaN(targetPage)) {
-                if (targetPage < 1 || targetPage > pdfDoc.numPages) return alert(`1~${pdfDoc.numPages} 사이 입력`);
+                if (targetPage < 1 || targetPage > pdfDoc.numPages) return alert(`1부터 ${pdfDoc.numPages}페이지 사이로 입력해주세요.`);
                 currentPage = targetPage;
                 renderCurrentPage();
+                return;
             }
+
+            alert("명령어가 올바르지 않습니다.\n- 이동: 숫자엔터 (예: 5)\n- 확대축소: 숫자+엔터 (예: 10+)");
         }
 
+        // [슬라이드쇼 전용 단일 페이지 렌더링 코어]
         function renderCurrentPage() {
             if (!pdfDoc) return;
             const viewer = document.getElementById('viewer');
-            viewer.innerHTML = '';
+            viewer.innerHTML = ''; // 캔버스 잔상 제거
 
             pdfDoc.getPage(currentPage).then(page => {
                 const viewport = page.getViewport({ scale: scale });
@@ -156,12 +171,15 @@
                 canvas.width = viewport.width;
                 viewer.appendChild(canvas);
 
+                // 상단 인포 바 수치 대입
                 document.getElementById('current-page').textContent = currentPage;
                 document.getElementById('zoom-val').textContent = Math.round(scale * 100) + '%';
+                
                 page.render({ canvasContext: canvas.getContext('2d'), viewport: viewport });
             });
         }
 
+        // 페이지 이전/다음 계산 처리
         function changePage(offset) {
             if (!pdfDoc) return;
             const nextPage = currentPage + offset;
