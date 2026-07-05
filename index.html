@@ -2,211 +2,71 @@
 <html lang="ko">
 <head>
     <meta charset="UTF-8">
-    <title>절대 멈추지 않는 PDF 뷰어</title>
-    <!-- [핵심] 별도의 worker 파일 요구가 없어 보안 에러가 안 나는 싱글 코어 안정 버전을 사용합니다. -->
-    <script src="https://cloudflare.com"></script>
+    <title>PDF Viewer</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
     <style>
         body { margin: 0; font-family: sans-serif; background: #525659; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
-        
-        /* 툴바 기본 디자인 및 애니메이션 */
-        .toolbar { 
-            background: #323639; color: white; padding: 12px; 
-            display: flex; gap: 15px; align-items: center; justify-content: center; 
-            position: sticky; top: 0; z-index: 100; 
-            box-shadow: 0 2px 5px rgba(0,0,0,0.3);
-            transition: transform 0.3s ease, opacity 0.3s ease;
-        }
-        
-        /* 전체 화면 시 메뉴 숨기기 처리 */
-        body.fullscreen-mode .toolbar {
-            position: absolute; width: 100%; box-sizing: border-box;
-            transform: translateY(-100%); opacity: 0;
-        }
-        
-        /* 전체 화면에서도 마우스를 맨 위로 올리면 슬라이드 다운 */
-        body.fullscreen-mode .toolbar:hover,
-        body.fullscreen-mode #fullscreen-trigger:hover + .toolbar {
-            transform: translateY(0); opacity: 1;
-        }
-
-        #fullscreen-trigger { position: absolute; top: 0; left: 0; width: 100%; height: 20px; z-index: 99; display: none; }
-        body.fullscreen-mode #fullscreen-trigger { display: block; }
-
-        .toolbar button, .toolbar label { padding: 6px 12px; background: #4a4a4a; color: white; border: 1px solid #666; border-radius: 4px; cursor: pointer; font-size: 14px; }
-        .toolbar button:hover, .toolbar label:hover { background: #5a5a5a; }
-        .toolbar input[type="number"] { width: 50px; text-align: center; background: #222; color: white; border: 1px solid #666; padding: 4px; }
-        #file-input { display: none; }
-        
-        /* 렌더링 영역 */
+        .toolbar { background: #323639; color: white; padding: 12px; display: flex; gap: 15px; justify-content: center; z-index: 100; transition: transform 0.3s; }
+        body.fullscreen-mode .toolbar { position: absolute; width: 100%; transform: translateY(-100%); opacity: 0; }
+        body.fullscreen-mode .toolbar:hover { transform: translateY(0); opacity: 1; }
         .viewer-container { flex: 1; overflow: auto; padding: 20px; display: flex; flex-direction: column; align-items: center; gap: 20px; }
-        .viewer-container.dragover { background: #404447; border: 3px dashed #3498db; }
-        canvas { background: white; box-shadow: 0 4px 10px rgba(0,0,0,0.2); max-width: 100%; height: auto; }
-        .viewer-container.grid-mode { flex-direction: row; flex-wrap: wrap; justify-content: center; }
+        canvas { background: white; box-shadow: 0 4px 10px rgba(0,0,0,0.2); max-width: 100%; }
+        .viewer-container.grid-mode { flex-direction: row; flex-wrap: wrap; }
         .viewer-container.grid-mode canvas { max-width: 45%; }
-        .placeholder-text { color: #ccc; font-size: 18px; margin-top: 100px; text-align: center; line-height: 1.8; pointer-events: none; }
+        .placeholder-text { color: #ccc; margin-top: 100px; text-align: center; }
     </style>
 </head>
 <body>
-
-    <div id="fullscreen-trigger"></div>
-
     <div class="toolbar">
-        <div>
-            <label for="file-input">📁 내 PC 파일 열기</label>
-            <input type="file" id="file-input" accept=".pdf" onchange="loadLocalFile(event)">
-        </div>
-        |
-        <div>
-            <button onclick="zoom(0.1)">➕ 크게</button>
-            <button onclick="zoom(-0.1)">➖ 작게</button>
-            <span id="zoom-val">120%</span>
-        </div>
-        |
-        <div>
-            <input type="number" id="page-input" value="1" min="1" onkeydown="if(event.key==='Enter') goToPage()"> / <span id="total-pages">0</span>
-            <button onclick="goToPage()">이동</button>
-        </div>
-        |
-        <div>
-            <button id="view-mode-btn" onclick="toggleViewMode()">🔲 여러 페이지 보기</button>
-        </div>
-        |
-        <div>
-            <button onclick="toggleFullscreen()">📺 전체 화면</button>
-        </div>
+        <input type="file" id="file-input" accept=".pdf" onchange="loadLocalFile(event)">
+        <button onclick="zoom(0.1)">➕</button>
+        <button onclick="zoom(-0.1)">➖</button>
+        <button id="view-mode-btn" onclick="toggleViewMode()">🔲</button>
+        <button onclick="toggleFullscreen()">📺</button>
     </div>
-
-    <!-- 파일 영역 -->
-    <div id="viewer" class="viewer-container" ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event)">
-        <div class="placeholder-text">
-            왼쪽 상단 <strong>[내 PC 파일 열기]</strong> 버튼을 누르거나,<br>
-            이 화면 안으로 PDF 파일을 끌어다 놓으세요.
-        </div>
-    </div>
-
+    <div id="viewer" class="viewer-container"></div>
     <script>
-        // 무조건 작동을 위해 구버전 전용의 싱글 빌드 글로벌 설정 주입
-        const pdfjsLib = window['pdfjs-dist/build/pdf'];
-        
-        let pdfDoc = null;
-        let scale = 1.2;
-        let isGridMode = false;
+        // PDF.js 설정 및 초기화
+        const pdfjsLib = window.pdfjsLib;
+        pdfjsLib.GlobalWorkerOptions.workerSrc = ''; 
+        let pdfDoc = null, scale = 1.2, isGridMode = false;
 
-        // 드래그 앤 드롭 제어
-        function onDragOver(e) { e.preventDefault(); document.getElementById('viewer').classList.add('dragover'); }
-        function onDragLeave(e) { e.preventDefault(); document.getElementById('viewer').classList.remove('dragover'); }
-        function onDrop(e) {
-            e.preventDefault();
-            document.getElementById('viewer').classList.remove('dragover');
-            const files = e.dataTransfer.files;
-            if (files.length > 0) readPdfFile(files[0]);
-        }
-        
-        function loadLocalFile(e) { 
-            if (e.target.files.length > 0) readPdfFile(e.target.files[0]); 
-        }
-
-        // 로컬 파일을 바이너리 배열로 전송 변환
-        function readPdfFile(file) {
-            if (file.type !== "application/pdf") return alert("PDF 파일만 업로드할 수 있습니다.");
-            
-            document.getElementById('viewer').innerHTML = '<div class="placeholder-text">⚡ 파일을 안정적으로 파싱하는 중입니다...</div>';
-            
+        function loadLocalFile(e) {
+            const file = e.target.files[0];
             const reader = new FileReader();
-            reader.onload = function() {
-                const typedarray = new Uint8Array(this.result);
-                renderPDF(typedarray);
-            };
+            reader.onload = function() { renderPDF(new Uint8Array(this.result)); };
             reader.readAsArrayBuffer(file);
         }
 
-        // PDF 엔진 기동 및 렌더 가동
         function renderPDF(data) {
             pdfjsLib.getDocument({data: data}).promise.then(pdf => {
                 pdfDoc = pdf;
-                document.getElementById('total-pages').textContent = pdf.numPages;
-                document.getElementById('page-input').value = 1;
                 renderAll();
-            }).catch(err => {
-                alert("엔진 로드 실패: " + err.message);
-                document.getElementById('viewer').innerHTML = '<div class="placeholder-text">PDF 해석에 에러가 발생했습니다.</div>';
             });
         }
 
         function renderAll() {
             const viewer = document.getElementById('viewer');
-            viewer.innerHTML = ''; 
-            if (isGridMode) {
-                for (let i = 1; i <= pdfDoc.numPages; i++) { createPageCanvas(i); }
-            } else {
-                const pageNum = parseInt(document.getElementById('page-input').value) || 1;
-                createPageCanvas(pageNum);
+            viewer.innerHTML = '';
+            for (let i = 1; i <= pdfDoc.numPages; i++) {
+                pdfDoc.getPage(i).then(page => {
+                    const viewport = page.getViewport({ scale: scale });
+                    const canvas = document.createElement('canvas');
+                    canvas.height = viewport.height; canvas.width = viewport.width;
+                    viewer.appendChild(canvas);
+                    page.render({ canvasContext: canvas.getContext('2d'), viewport: viewport });
+                });
             }
         }
-
-        function createPageCanvas(pageNum) {
-            pdfDoc.getPage(pageNum).then(page => {
-                const viewport = page.getViewport({ scale: scale });
-                const canvas = document.createElement('canvas');
-                const context = canvas.getContext('2d');
-                canvas.height = viewport.height;
-                canvas.width = viewport.width;
-                document.getElementById('viewer').appendChild(canvas);
-                page.render({ canvasContext: context, viewport: viewport });
-            });
-        }
-
-        // 툴바 제어 로직들
-        function zoom(amount) {
-            if (!pdfDoc) return;
-            scale = Math.max(0.4, Math.min(3.5, scale + amount));
-            document.getElementById('zoom-val').textContent = Math.round(scale * 100) + '%';
-            renderAll();
-        }
-
-        function goToPage() {
-            if (!pdfDoc || isGridMode) return;
-            let input = document.getElementById('page-input');
-            let pageNum = parseInt(input.value);
-            if (pageNum < 1) pageNum = 1;
-            if (pageNum > pdfDoc.numPages) pageNum = pdfDoc.numPages;
-            input.value = pageNum;
-            renderAll();
-        }
-
-        function toggleViewMode() {
-            if (!pdfDoc) return alert("파일을 먼저 열어주세요.");
-            isGridMode = !isGridMode;
-            const viewer = document.getElementById('viewer');
-            const btn = document.getElementById('view-mode-btn');
-            const pageInput = document.getElementById('page-input');
-
-            if (isGridMode) {
-                viewer.classList.add('grid-mode');
-                btn.textContent = "📄 한 페이지씩 보기";
-                pageInput.disabled = true;
-            } else {
-                viewer.classList.remove('grid-mode');
-                btn.textContent = "🔲 여러 페이지 보기";
-                pageInput.disabled = false;
-            }
-            renderAll();
-        }
-
+        
+        function zoom(amount) { scale = Math.max(0.4, Math.min(3.5, scale + amount)); renderAll(); }
+        
         function toggleFullscreen() {
-            if (!pdfDoc) return alert("파일을 먼저 열어주세요.");
             if (!document.fullscreenElement) {
-                document.documentElement.requestFullscreen().then(() => {
-                    document.body.classList.add('fullscreen-mode');
-                }).catch(err => alert(`전체화면 실패: ${err.message}`));
-            } else {
-                document.exitFullscreen();
-            }
+                document.documentElement.requestFullscreen();
+                document.body.classList.add('fullscreen-mode');
+            } else { document.exitFullscreen(); document.body.classList.remove('fullscreen-mode'); }
         }
-
-        document.addEventListener('fullscreenchange', () => {
-            if (!document.fullscreenElement) document.body.classList.remove('fullscreen-mode');
-        });
     </script>
 </body>
 </html>
