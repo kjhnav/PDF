@@ -2,128 +2,155 @@
 <html lang="ko">
 <head>
     <meta charset="UTF-8">
-    <title>내 스마트 PDF 뷰어</title>
-    <!-- 오픈소스 PDF.js 라이브러리 (Cloudflare CDN을 통해 안전하게 가져옵니다) -->
-    <script src="https://cloudflare.com"></script>
+    <title>전체 화면 지원 PDF 뷰어</title>
+    <script src="https://unpkg.com"></script>
     <style>
-        body { margin: 0; font-family: sans-serif; background: #525659; display: flex; flex-direction: column; height: 100vh; }
-        /* 상단 툴바 조작 영역 */
-        .toolbar { background: #323639; color: white; padding: 12px; display: flex; gap: 15px; align-items: center; justify-content: center; position: sticky; top: 0; z-index: 100; box-shadow: 0 2px 5px rgba(0,0,0,0.3); flex-wrap: wrap; }
-        .toolbar button, .toolbar input[type="button"], .toolbar label { padding: 6px 12px; background: #4a4a4a; color: white; border: 1px solid #666; border-radius: 4px; cursor: pointer; font-size: 14px; }
+        body { margin: 0; font-family: sans-serif; background: #525659; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+        
+        /* 상단 툴바 스타일 및 애니메이션 설정 */
+        .toolbar { 
+            background: #323639; color: white; padding: 12px; 
+            display: flex; gap: 15px; align-items: center; justify-content: center; 
+            position: sticky; top: 0; z-index: 100; 
+            box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+            transition: transform 0.3s ease, opacity 0.3s ease;
+        }
+        
+        /* [핵심] 전체 화면 상태에서 메뉴 숨기기 클래스 */
+        body.fullscreen-mode .toolbar {
+            position: absolute;
+            width: 100%;
+            box-sizing: border-box;
+            transform: translateY(-100%); /* 화면 위로 숨김 */
+            opacity: 0;
+        }
+        
+        /* 전체 화면이라도 마우스를 화면 맨 위(Top 20px 이내)로 올리면 메뉴가 슬라이드 다운 */
+        body.fullscreen-mode .toolbar:hover,
+        body.fullscreen-mode #fullscreen-trigger:hover + .toolbar {
+            transform: translateY(0);
+            opacity: 1;
+        }
+
+        /* 마우스 감지용 투명 레이어 */
+        #fullscreen-trigger {
+            position: absolute; top: 0; left: 0; width: 100%; height: 20px; z-index: 99; display: none;
+        }
+        body.fullscreen-mode #fullscreen-trigger { display: block; }
+
+        .toolbar button, .toolbar label { padding: 6px 12px; background: #4a4a4a; color: white; border: 1px solid #666; border-radius: 4px; cursor: pointer; font-size: 14px; }
         .toolbar button:hover, .toolbar label:hover { background: #5a5a5a; }
         .toolbar input[type="number"] { width: 50px; text-align: center; background: #222; color: white; border: 1px solid #666; padding: 4px; }
-        .toolbar input[type="text"] { width: 200px; background: #222; color: white; border: 1px solid #666; padding: 6px; border-radius: 4px; }
-        /* 파일 업로드 숨김 라벨 스타일링 */
         #file-input { display: none; }
-        /* PDF 렌더링 화면 (잘림 방지 스크롤) */
+        
         .viewer-container { flex: 1; overflow: auto; padding: 20px; display: flex; flex-direction: column; align-items: center; gap: 20px; }
+        .viewer-container.dragover { background: #404447; border: 3px dashed #3498db; }
         canvas { background: white; box-shadow: 0 4px 10px rgba(0,0,0,0.2); max-width: 100%; height: auto; }
         .viewer-container.grid-mode { flex-direction: row; flex-wrap: wrap; justify-content: center; }
         .viewer-container.grid-mode canvas { max-width: 45%; }
-        /* 안내 문구 */
-        .placeholder-text { color: #ccc; font-size: 18px; margin-top: 100px; text-align: center; line-height: 1.6; }
+        .placeholder-text { color: #ccc; font-size: 18px; margin-top: 100px; text-align: center; line-height: 1.8; pointer-events: none; }
     </style>
 </head>
 <body>
 
-    <!-- 상단 컨트롤 툴바 -->
-    <div class="toolbar">
-        <!-- 파일 불러오기 파트 -->
+    <!-- 전체 화면 시 마우스 감지용 영역 -->
+    <div id="fullscreen-trigger"></div>
+
+    <div class="toolbar" id="my-toolbar">
         <div>
-            <label for="file-input">📁 내 PC 파일 찾기</label>
+            <label for="file-input">📁 내 PC 파일 열기</label>
             <input type="file" id="file-input" accept=".pdf" onchange="loadLocalFile(event)">
         </div>
-        <div>
-            <input type="text" id="url-input" placeholder="구글 드라이브 링크 입력">
-            <button onclick="loadDriveFile()">🔗 링크 열기</button>
-        </div>
         |
-        <!-- 크기 조절 -->
         <div>
             <button onclick="zoom(0.1)">➕ 크게</button>
             <button onclick="zoom(-0.1)">➖ 작게</button>
             <span id="zoom-val">120%</span>
         </div>
         |
-        <!-- 페이지 이동 -->
         <div>
             <input type="number" id="page-input" value="1" min="1" onkeydown="if(event.key==='Enter') goToPage()"> / <span id="total-pages">0</span>
             <button onclick="goToPage()">이동</button>
         </div>
         |
-        <!-- 멀티 보기 -->
         <div>
             <button id="view-mode-btn" onclick="toggleViewMode()">🔲 여러 페이지 보기</button>
         </div>
+        |
+        <!-- 전체 화면 버튼 추가 -->
+        <div>
+            <button onclick="toggleFullscreen()">📺 전체 화면</button>
+        </div>
     </div>
 
-    <!-- PDF가 그려지는 본문 영역 -->
-    <div id="viewer" class="viewer-container">
+    <div id="viewer" class="viewer-container" ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event)">
         <div class="placeholder-text">
-            상단에서 PDF 파일을 업로드하거나<br>구글 드라이브 공유 링크를 넣어주세요.
+            왼쪽 상단 <strong>[내 PC 파일 열기]</strong> 버튼을 누르거나,<br>
+            이 화면 안으로 PDF 파일을 끌어다 놓으세요.
         </div>
     </div>
 
     <script>
-        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cloudflare.com';
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://unpkg.com';
 
         let pdfDoc = null;
         let scale = 1.2;
         let isGridMode = false;
 
-        // 1. 내 컴퓨터 파일 업로드 처리 함수
-        function loadLocalFile(event) {
-            const file = event.target.files[0];
-            if (!file) return;
-
-            const fileReader = new FileReader();
-            fileReader.onload = function() {
-                const typedarray = new Uint8Array(this.result);
-                renderPDF(typedarray); // 바이너리 데이터로 PDF 로드
-            };
-            fileReader.readAsArrayBuffer(file);
-        }
-
-        // 2. 구글 드라이브 공유 링크 처리 함수
-        function loadDriveFile() {
-            let url = document.getElementById('url-input').value.trim();
-            if (!url) return alert("링크를 입력해주세요.");
-
-            // 구글 드라이브 웹 주소를 파일 다운로드 직통 주소(Direct Download URL)로 자동 변환하는 정규식
-            const driveRegex = /\/d\/([a-zA-Z0-9-_]+)/;
-            const match = url.match(driveRegex);
-
-            if (match && match[1]) {
-                const fileId = match[1];
-                // 핵심: 브라우저 보안(CORS) 우회를 위한 구글 공식 다운로드 프록시 주소 주입
-                const directUrl = `https://google.com{fileId}`;
-                renderPDF(directUrl);
+        // [신규] 전체 화면 토글 함수
+        function toggleFullscreen() {
+            if (!pdfDoc) return alert("파일을 먼저 열어주세요.");
+            
+            if (!document.fullscreenElement) {
+                // 브라우저 자체 전체 화면 요청 (모니터 가득 채우기)
+                document.documentElement.requestFullscreen().then(() => {
+                    document.body.classList.add('fullscreen-mode');
+                }).catch(err => alert(`전체 화면 실패: ${err.message}`));
             } else {
-                // 일반 웹 주소일 경우 그대로 로드 시도
-                renderPDF(url);
+                document.exitFullscreen();
             }
         }
 
-        // PDF 엔진 초기화 및 로드 공통 함수
-        function renderPDF(source) {
-            document.getElementById('viewer').innerHTML = '<div class="placeholder-text">로딩 중...</div>';
-            
-            pdfjsLib.getDocument(source).promise.then(pdf => {
+        // ESC 키 등으로 전체 화면 빠져나갈 때 메뉴판 복구 이벤트 감지
+        document.addEventListener('fullscreenchange', () => {
+            if (!document.fullscreenElement) {
+                document.body.classList.remove('fullscreen-mode');
+            }
+        });
+
+        // 드래그 앤 드롭 및 기본 업로드 로직
+        function onDragOver(e) { e.preventDefault(); document.getElementById('viewer').classList.add('dragover'); }
+        function onDragLeave(e) { e.preventDefault(); document.getElementById('viewer').classList.remove('dragover'); }
+        function onDrop(e) {
+            e.preventDefault();
+            document.getElementById('viewer').classList.remove('dragover');
+            const files = e.dataTransfer.files;
+            if (files.length > 0 && files[0].type === "application/pdf") readPdfFile(files[0]);
+        }
+        function loadLocalFile(e) { if (e.target.files.length > 0) readPdfFile(e.target.files[0]); }
+
+        function readPdfFile(file) {
+            document.getElementById('viewer').innerHTML = '<div class="placeholder-text">⚡ 파일을 읽는 중입니다...</div>';
+            const reader = new FileReader();
+            reader.onload = function() { renderPDF(new Uint8Array(this.result)); };
+            reader.readAsArrayBuffer(file);
+        }
+
+        function renderPDF(data) {
+            pdfjsLib.getDocument({data: data}).promise.then(pdf => {
                 pdfDoc = pdf;
                 document.getElementById('total-pages').textContent = pdf.numPages;
                 document.getElementById('page-input').value = 1;
                 renderAll();
             }).catch(err => {
-                alert("PDF를 열 수 없습니다.\n원인: " + err.message + "\n\n※ 구글 드라이브 링크인 경우 반드시 '링크가 있는 모든 사용자에게 공개(뷰어)'로 권한이 설정되어 있어야 합니다.");
-                document.getElementById('viewer').innerHTML = '<div class="placeholder-text">파일 로드에 실패했습니다.</div>';
+                alert("오류: " + err.message);
+                document.getElementById('viewer').innerHTML = '<div class="placeholder-text">PDF를 해석하지 못했습니다.</div>';
             });
         }
 
-        // 화면 그리기 및 제어 로직 (이전과 동일)
         function renderAll() {
             const viewer = document.getElementById('viewer');
             viewer.innerHTML = ''; 
-
             if (isGridMode) {
                 for (let i = 1; i <= pdfDoc.numPages; i++) { createPageCanvas(i); }
             } else {
@@ -146,7 +173,7 @@
 
         function zoom(amount) {
             if (!pdfDoc) return;
-            scale = Math.max(0.5, Math.min(3.0, scale + amount));
+            scale = Math.max(0.4, Math.min(3.5, scale + amount));
             document.getElementById('zoom-val').textContent = Math.round(scale * 100) + '%';
             renderAll();
         }
@@ -162,7 +189,7 @@
         }
 
         function toggleViewMode() {
-            if (!pdfDoc) return alert("파일을 먼저 업로드해주세요.");
+            if (!pdfDoc) return alert("파일을 먼저 열어주세요.");
             isGridMode = !isGridMode;
             const viewer = document.getElementById('viewer');
             const btn = document.getElementById('view-mode-btn');
