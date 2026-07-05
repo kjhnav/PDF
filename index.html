@@ -2,46 +2,59 @@
 <html lang="ko">
 <head>
     <meta charset="UTF-8">
-    <title>단축키 PDF 슬라이드쇼</title>
+    <title>PDF Viewer</title>
+    <!-- 성공했던 원본 라이브러리를 그대로 사용합니다 -->
     <script src="https://cloudflare.com"></script>
     <style>
-        /* 메뉴 바를 완전히 삭제하여 화면 전체를 PDF 전용 공간으로 씁니다 */
         body { margin: 0; font-family: sans-serif; background: #525659; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
-        .viewer-container { flex: 1; overflow: auto; padding: 0; display: flex; justify-content: center; align-items: center; }
-        canvas { background: white; box-shadow: 0 4px 15px rgba(0,0,0,0.5); max-width: 100%; height: auto; display: block; }
+        
+        /* [수정] 상단 회색 메뉴바(toolbar)를 완전히 삭제하여 화면에 노출되지 않습니다 */
+        
+        /* 뷰어 컨테이너 영역 (성공 원본 구조 유지) */
+        .viewer-container { flex: 1; overflow: auto; padding: 20px; display: flex; flex-direction: column; align-items: center; gap: 20px; }
+        canvas { background: white; box-shadow: 0 4px 10px rgba(0,0,0,0.2); max-width: 100%; }
+        
+        /* 파일 선택 태그 은닉 */
         #file-input { display: none; }
-        .placeholder-text { color: #ccc; text-align: center; font-size: 20px; line-height: 2.2; pointer-events: none; }
+        
+        /* 안내 문구 스타일 */
+        .placeholder-text { color: #ccc; margin-top: 100px; text-align: center; font-size: 20px; line-height: 2.2; }
         .hint-box { font-size: 14px; color: #aaa; background: #3c3f41; padding: 15px 25px; border-radius: 8px; margin-top: 20px; display: inline-block; text-align: left; }
     </style>
 </head>
 <body>
 
+    <!-- 숨겨진 파일 수신 컨트롤러 -->
     <input type="file" id="file-input" accept=".pdf" onchange="loadLocalFile(event)">
 
+    <!-- PDF가 그려지는 본문 영역 (성공 원형 유지) -->
     <div id="viewer" class="viewer-container">
         <div class="placeholder-text">
-            <strong>스마트 PDF 단축키 뷰어</strong><br>
-            메뉴 바가 완전히 제거된 버전입니다. 아래 단축키로 제어하세요.
+            <strong>스마트 PDF 프레젠테이션 뷰어</strong><br>
+            상단 메뉴 바가 완전히 제거된 버전입니다. 아래 단축키로 제어하세요.
             <br>
             <div class="hint-box">
-                ⌨️ <strong>단축키 제어 가이드</strong><br>
+                ⌨️ <strong>단축키 가이드</strong><br>
                 • <strong>Ctrl + O</strong> : 내 PC에서 PDF 파일 불러오기<br>
-                • <strong>+ (더하기 키)</strong> : 화면 10%씩 크게 확대<br>
-                • <strong>- (빼기 키)</strong> : 화면 10%씩 작게 축소<br>
+                • <strong>+ (더하기)</strong> : 화면 10%씩 크게 확대<br>
+                • <strong>- (빼기)</strong> : 화면 10%씩 작게 축소<br>
                 • <strong>방향키 (▲ / ▼)</strong> : 이전 페이지 / 다음 페이지 이동<br>
-                • <strong>F11</strong> : 브라우저 자체 전체화면 (메뉴가 없는 완벽한 슬라이드쇼)
+                • <strong>F11</strong> : 브라우저 자체 전체화면 (완벽한 슬라이드쇼 모드)
             </div>
         </div>
     </div>
 
     <script>
+        // 성공했던 설정 원형 100% 동일 보존
         const pdfjsLib = window.pdfjsLib;
         pdfjsLib.GlobalWorkerOptions.workerSrc = ''; 
         
-        let pdfDoc = null, currentPage = 1, scale = 1.8; // 기본 배율을 크게 설정
+        // 초기 배율을 크게 조정하기 위해 기본값만 1.8로 보정했습니다
+        let pdfDoc = null, scale = 1.8, currentPage = 1;
 
-        // [단축키 허브]
+        // [단축키 시스템 인터페이스 연결]
         document.addEventListener('keydown', (e) => {
+            // 1. 파일 열기 (Ctrl + O)
             if (e.ctrlKey && e.key.toLowerCase() === 'o') {
                 e.preventDefault(); 
                 document.getElementById('file-input').click(); 
@@ -50,49 +63,50 @@
 
             if (!pdfDoc) return;
 
-            // 방향키 페이지 이동 (위/아래 및 좌/우 모두 지원)
+            // 2. 위/아래(▲/▼) 및 좌/우(◀/▶) 방향키 입력 시 한 장씩 슬라이드 이동
             if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') { e.preventDefault(); changePage(-1); }
             if (e.key === 'ArrowDown' || e.key === 'ArrowRight') { e.preventDefault(); changePage(1); }
 
-            // +, - 단독 입력으로 확대/축소
+            // 3. 단독 + 키와 - 키 입력 시 실시간 화면 크기 정밀 제어 (10%씩)
             if (e.key === '+' || e.key === '=') { scale = Math.min(4.0, scale + 0.1); renderCurrentPage(); }
             if (e.key === '-') { scale = Math.max(0.4, scale - 0.1); renderCurrentPage(); }
         });
 
+        // [★원상 복구 완수] 성공하셨던 로컬 파일 바인딩 원형 코드 그대로 대입
         function loadLocalFile(e) {
-            const file = e.target.files[0]; // 안전한 타겟팅 명시
-            if (!file) return;
+            const file = e.target.files[0]; // [교정 핵심] 0번 인덱스 명시 원상 복구 완료
             const reader = new FileReader();
             reader.onload = function() { renderPDF(new Uint8Array(this.result)); };
             reader.readAsArrayBuffer(file);
         }
 
+        // 성공했던 PDF 파싱 프로세스 원형 그대로 유지
         function renderPDF(data) {
-            pdfjsLib.getDocument({
-                data: data,
-                stopAtErrors: false,
-                isEvalSupported: false
-            }).promise.then(pdf => {
+            pdfjsLib.getDocument({data: data}).promise.then(pdf => {
                 pdfDoc = pdf;
-                currentPage = 1;
+                currentPage = 1; // 새 파일 작동 시 1페이지 마크
                 renderCurrentPage();
-            }).catch(err => alert("파일 로드 실패: " + err.message));
+            });
         }
 
+        // [슬라이드쇼 전환 구현] 루프를 돌던 방식에서 현재 지정된 딱 '한 장'만 그리도록 제어
         function renderCurrentPage() {
             if (!pdfDoc) return;
             const viewer = document.getElementById('viewer');
-            viewer.innerHTML = ''; 
+            viewer.innerHTML = ''; // 기존 캔버스 초기화
 
             pdfDoc.getPage(currentPage).then(page => {
                 const viewport = page.getViewport({ scale: scale });
                 const canvas = document.createElement('canvas');
                 canvas.height = viewport.height; canvas.width = viewport.width;
                 viewer.appendChild(canvas);
+                
+                // 성공했던 렌더 구조식 그대로 활용
                 page.render({ canvasContext: canvas.getContext('2d'), viewport: viewport });
             });
         }
 
+        // 페이지 핸들러 인덱스 계산 장치
         function changePage(offset) {
             if (!pdfDoc) return;
             const nextPage = currentPage + offset;
