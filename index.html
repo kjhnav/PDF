@@ -2,118 +2,101 @@
 <html lang="ko">
 <head>
     <meta charset="UTF-8">
-    <title>PDF Viewer</title>
-    <!-- 성공했던 원본 라이브러리를 그대로 사용합니다 -->
-    <script src="https://cloudflare.com"></script>
+    <title>스마트 PDF 프레젠테이션 뷰어</title>
     <style>
         body { margin: 0; font-family: sans-serif; background: #525659; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
         
-        /* [수정] 상단 회색 메뉴바(toolbar)를 완전히 삭제하여 화면에 노출되지 않습니다 */
+        /* 왼쪽 구석 초미니 투명 조작 바 */
+        .toolbar { 
+            position: absolute; top: 10px; left: 10px; z-index: 1000;
+            background: rgba(50, 54, 57, 0.5); padding: 6px; border-radius: 6px;
+            display: flex; gap: 8px; align-items: center; opacity: 0.3; transition: opacity 0.2s;
+        }
+        .toolbar:hover { opacity: 1; background: rgba(50, 54, 57, 0.9); }
+        .toolbar button, .toolbar label { padding: 4px 8px; background: #4a4a4a; color: white; border: 1px solid #666; border-radius: 4px; cursor: pointer; font-size: 12px; }
+        .toolbar button:hover, .toolbar label:hover { background: #5a5a5a; }
         
-        /* 뷰어 컨테이너 영역 (성공 원본 구조 유지) */
-        .viewer-container { flex: 1; overflow: auto; padding: 20px; display: flex; flex-direction: column; align-items: center; gap: 20px; }
-        canvas { background: white; box-shadow: 0 4px 10px rgba(0,0,0,0.2); max-width: 100%; }
+        /* PDF 뷰어 영역 (화면 전체 꽉 차게 설정) */
+        .viewer-container { flex: 1; width: 100%; height: 100%; display: flex; justify-content: center; align-items: center; position: relative; }
         
-        /* 파일 선택 태그 은닉 */
+        /* [교정 핵심] 보안 차단을 우회하여 PDF 원본을 가두는 프레임 박스 */
+        #pdf-frame { width: 100%; height: 100%; border: none; transition: transform 0.1s ease; transform-origin: center center; display: none; }
+        
         #file-input { display: none; }
-        
-        /* 안내 문구 스타일 */
-        .placeholder-text { color: #ccc; margin-top: 100px; text-align: center; font-size: 20px; line-height: 2.2; }
-        .hint-box { font-size: 14px; color: #aaa; background: #3c3f41; padding: 15px 25px; border-radius: 8px; margin-top: 20px; display: inline-block; text-align: left; }
+        .placeholder-text { color: #ccc; text-align: center; font-size: 18px; line-height: 2.0; pointer-events: none; position: absolute; }
     </style>
 </head>
 <body>
 
-    <!-- 숨겨진 파일 수신 컨트롤러 -->
-    <input type="file" id="file-input" accept=".pdf" onchange="loadLocalFile(event)">
+    <!-- 왼쪽 상단 구석 초미니 메뉴 -->
+    <div class="toolbar">
+        <label for="file-input">📁 열기</label>
+        <input type="file" id="file-input" accept=".pdf" onchange="loadLocalFile(event)">
+        <button onclick="zoom(0.1)">➕ 크게</button>
+        <button onclick="zoom(-0.1)">➖ 작게</button>
+    </div>
 
-    <!-- PDF가 그려지는 본문 영역 (성공 원형 유지) -->
+    <!-- PDF 본문 렌더링 영역 -->
     <div id="viewer" class="viewer-container">
-        <div class="placeholder-text">
-            <strong>스마트 PDF 프레젠테이션 뷰어</strong><br>
-            상단 메뉴 바가 완전히 제거된 버전입니다. 아래 단축키로 제어하세요.
-            <br>
-            <div class="hint-box">
-                ⌨️ <strong>단축키 가이드</strong><br>
-                • <strong>Ctrl + O</strong> : 내 PC에서 PDF 파일 불러오기<br>
-                • <strong>+ (더하기)</strong> : 화면 10%씩 크게 확대<br>
-                • <strong>- (빼기)</strong> : 화면 10%씩 작게 축소<br>
-                • <strong>방향키 (▲ / ▼)</strong> : 이전 페이지 / 다음 페이지 이동<br>
-                • <strong>F11</strong> : 브라우저 자체 전체화면 (완벽한 슬라이드쇼 모드)
-            </div>
+        <div id="guide-text" class="placeholder-text">
+            <strong>보안 우회형 PDF 슬라이드쇼 뷰어</strong><br>
+            • <strong>Ctrl + O</strong> 키나 왼쪽 구석의 📁 버튼을 눌러 PDF 파일을 불러오세요.<br>
+            • 파일이 열린 후 <strong>F11</strong>을 누르면 전체화면 슬라이드쇼가 시작됩니다.
         </div>
+        <!-- 브라우저 강제 주입용 임베드 객체 -->
+        <embed id="pdf-frame" type="application/pdf">
     </div>
 
     <script>
-        // 성공했던 설정 원형 100% 동일 보존
-        const pdfjsLib = window.pdfjsLib;
-        pdfjsLib.GlobalWorkerOptions.workerSrc = ''; 
-        
-        // 초기 배율을 크게 조정하기 위해 기본값만 1.8로 보정했습니다
-        let pdfDoc = null, scale = 1.8, currentPage = 1;
+        let scale = 1.0; // 기본 배율 변수
 
-        // [단축키 시스템 인터페이스 연결]
+        // 단축키 조작 (Ctrl + O 및 크기 조절 키 매핑)
         document.addEventListener('keydown', (e) => {
-            // 1. 파일 열기 (Ctrl + O)
+            // 파일 열기 (Ctrl + O)
             if (e.ctrlKey && e.key.toLowerCase() === 'o') {
                 e.preventDefault(); 
                 document.getElementById('file-input').click(); 
                 return;
             }
 
-            if (!pdfDoc) return;
-
-            // 2. 위/아래(▲/▼) 및 좌/우(◀/▶) 방향키 입력 시 한 장씩 슬라이드 이동
-            if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') { e.preventDefault(); changePage(-1); }
-            if (e.key === 'ArrowDown' || e.key === 'ArrowRight') { e.preventDefault(); changePage(1); }
-
-            // 3. 단독 + 키와 - 키 입력 시 실시간 화면 크기 정밀 제어 (10%씩)
-            if (e.key === '+' || e.key === '=') { scale = Math.min(4.0, scale + 0.1); renderCurrentPage(); }
-            if (e.key === '-') { scale = Math.max(0.4, scale - 0.1); renderCurrentPage(); }
+            // +, - 키 단독 입력으로 화면 크기 정밀 조절
+            if (e.key === '+' || e.key === '=') { zoom(0.1); }
+            if (e.key === '-') { zoom(-0.1); }
         });
 
-        // [★원상 복구 완수] 성공하셨던 로컬 파일 바인딩 원형 코드 그대로 대입
+        // 로컬 파일을 브라우저의 다운로드 간섭 없이 강제로 화면에 주입하는 핵심 로직
         function loadLocalFile(e) {
-            const file = e.target.files[0]; // [교정 핵심] 0번 인덱스 명시 원상 복구 완료
+            const file = e.target.files[0];
+            if (!file) return;
+
             const reader = new FileReader();
-            reader.onload = function() { renderPDF(new Uint8Array(this.result)); };
-            reader.readAsArrayBuffer(file);
-        }
-
-        // 성공했던 PDF 파싱 프로세스 원형 그대로 유지
-        function renderPDF(data) {
-            pdfjsLib.getDocument({data: data}).promise.then(pdf => {
-                pdfDoc = pdf;
-                currentPage = 1; // 새 파일 작동 시 1페이지 마크
-                renderCurrentPage();
-            });
-        }
-
-        // [슬라이드쇼 전환 구현] 루프를 돌던 방식에서 현재 지정된 딱 '한 장'만 그리도록 제어
-        function renderCurrentPage() {
-            if (!pdfDoc) return;
-            const viewer = document.getElementById('viewer');
-            viewer.innerHTML = ''; // 기존 캔버스 초기화
-
-            pdfDoc.getPage(currentPage).then(page => {
-                const viewport = page.getViewport({ scale: scale });
-                const canvas = document.createElement('canvas');
-                canvas.height = viewport.height; canvas.width = viewport.width;
-                viewer.appendChild(canvas);
+            reader.onload = function(event) {
+                const pdfData = event.target.result;
+                const frame = document.getElementById('pdf-frame');
                 
-                // 성공했던 렌더 구조식 그대로 활용
-                page.render({ canvasContext: canvas.getContext('2d'), viewport: viewport });
-            });
+                // 브라우저의 보안 필터를 우회하여 바이너리 데이터를 웹 화면에 강제 렌더링 유도
+                frame.src = pdfData;
+                frame.style.display = 'block';
+                
+                // 초기 안내문 숨기기
+                document.getElementById('guide-text').style.display = 'none';
+                
+                // 크기 초기화
+                scale = 1.0;
+                frame.style.transform = `scale(${scale})`;
+            };
+            
+            // 파일을 주소 방식이 아닌 내부 데이터(DataURL) 스트림으로 직독직해하여 다운로드 차단 유효화
+            reader.readAsDataURL(file);
         }
 
-        // 페이지 핸들러 인덱스 계산 장치
-        function changePage(offset) {
-            if (!pdfDoc) return;
-            const nextPage = currentPage + offset;
-            if (nextPage >= 1 && nextPage <= pdfDoc.numPages) {
-                currentPage = nextPage;
-                renderCurrentPage();
-            }
+        // 크기 조절 제어 함수 (+10%, -10% 스케일 트랜스폼 연산)
+        function zoom(amount) {
+            const frame = document.getElementById('pdf-frame');
+            if (!frame || frame.style.display !== 'block') return;
+            
+            scale = Math.max(0.4, Math.min(4.0, scale + amount));
+            frame.style.transform = `scale(${scale})`;
         }
     </script>
 </body>
